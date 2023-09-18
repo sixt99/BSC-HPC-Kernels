@@ -225,7 +225,6 @@ void relu(float *T, float *D, float alpha, int *shape, int N){
 void axpy(float *a, float *b, float *c, float alpha, float beta, int N){
 	int i;
 	int gvl;
-	float *sixte;
 	__epi_2xf32 va;
         __epi_2xf32 vb;
         __epi_2xf32 vc;
