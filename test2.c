@@ -1,54 +1,193 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <time.h>
 
+void scalar_vector_sum(float *, float *, float *, int);
 void vector_sum(float *, float *, float *, int);
+
 void triad(float [][32], float [][32], float [][32], int, int);
 void efficient_triad(float *, float *, float *, int, int);
+
+void scalar_relu(float *, float *, float, int *, int);
 void relu(float *, float *, float, int *, int);	
-void axpy(float *, float *, float *, float, float, int);
+
+void scalar_axpy(float *, float *, float *, int);
+void axpy(float *, float *, float *, int);
 void efficient_axpy(float *, float *, float *, int);
+	
 void sum(float **, float *, int *, int, int);
 void unrolled2_sum(float **, float *, int *, int, int);
-void unrolled4_sum(float **, float *, int *, int, int);
 
-// Set the name of this function to main to run
-int main_relu(void){
+// ------------------------------------
+// ---------- MAIN FUNCTIONS ----------
+// ------------------------------------
+
+// SUM OF TWO TENSORS 
+int main_vec(void){
+	int i;
+	int N;
+	float *a;
+	float *b;
+	float *c;
+	uint64_t start_cycles;
+        uint64_t start_instret;
+        uint64_t end_cycles;
+        uint64_t end_instret;
+	FILE *file = fopen("results.txt", "w");
+
+	fprintf(file, "%15s %15s %15s %15s %15s %15s %15s\n", "N", "cycles1", "cycles2", "instret1", "instret2", "cyc1/cyc2", "inst1/inst2");
+
+	for(N=5000; N<=15000; N+=5000){
+		float *a = (float *)malloc(N * sizeof(float));
+        	float *b = (float *)malloc(N * sizeof(float));
+        	float *c = (float *)malloc(N * sizeof(float));
+
+		srand(time(NULL));
+		for(i=0; i<N; i++){
+			a[i] = ((float)rand() / (float)RAND_MAX) * 100 - 50;
+			b[i] = ((float)rand() / (float)RAND_MAX) * 100 - 50;
+		}
+
+		// SCALAR VERSION
+		__asm__ __volatile__("rdinstret %0" : "=r"(start_instret));
+        	__asm__ __volatile__("rdcycle %0"   : "=r"(start_cycles));
+
+		scalar_vector_sum(a, b, c, N);
+
+        	__asm__ __volatile__("rdcycle %0"   : "=r"(end_cycles));
+        	__asm__ __volatile__("rdinstret %0" : "=r"(end_instret));
+
+        	uint64_t cycles1  = end_cycles  - start_cycles;
+        	uint64_t instret1 = end_instret - start_instret;
+
+		// VECTOR VERSION
+                __asm__ __volatile__("rdinstret %0" : "=r"(start_instret));
+                __asm__ __volatile__("rdcycle %0"   : "=r"(start_cycles));
+
+                vector_sum(a, b, c, N);
+
+                __asm__ __volatile__("rdcycle %0"   : "=r"(end_cycles));
+                __asm__ __volatile__("rdinstret %0" : "=r"(end_instret));
+
+		free(a);
+		free(b);
+		free(c);
+
+                uint64_t cycles2  = end_cycles  - start_cycles;
+                uint64_t instret2 = end_instret - start_instret;
+
+		fprintf(file, "%15d %15.lu %15.lu %15.lu %15.lu %15.2f %15.2f\n", N, cycles1, cycles2, instret1, instret2, (float)cycles1/cycles2, (float)instret1/instret2);
+	}
+
+	return 0;
+}
+
+// RELU
+int main(void){
         int i;
         int j;
-        int M=20;
-        int N=20;
-	int *shape = (int *)malloc(2 * sizeof(int));
+	int l;
+	int N = 5;
+	int M = 3;
+
+	uint64_t start_cycles;
+        uint64_t start_instret;
+        uint64_t end_cycles;
+        uint64_t end_instret;
+
+	FILE *file = fopen("results.txt", "w");
+
+	int shapes1[21][3] = {
+    		{1, 1, 120},
+    		{5, 5, 16},
+    		{1, 32, 32},
+		{14, 14, 6},
+		{10, 10, 16},
+		{28, 28, 6},
+		{128, 14, 14},
+		{512, 7, 7},
+		{1024, 7, 7},
+		{256, 14, 14},
+		{64, 28, 28},
+		{128, 28, 28},
+		{2048, 7, 7},
+		{32, 56, 56},
+		{512, 14, 14},
+		{1024, 14, 14},
+		{256, 28, 28},
+		{64, 56, 56},
+		{32, 112, 112},
+		{512, 28, 28},
+		{256, 56, 56}
+	};
+
+	int shapes[5][3] = {
+                {1, 1, 120},
+                {5, 5, 16},
+                {1, 32, 32},
+                {14, 14, 6},
+                {2048, 7, 7}
+        };
+
+        int *shape = (int *)malloc(M * sizeof(int));
         float alpha = 0.5;
-	float *T = (float *)malloc(M * N * sizeof(float));
-        float *D = (float *)malloc(M * N * sizeof(float));
+	
+	fprintf(file, "%15s %15s %15s %15s %15s %15s %15s\n", "shape", "cycles1", "cycles2", "instret1", "instret2", "cyc1/cyc2", "inst1/inst2");
 
-	shape[0] = M; shape[1] = N;
+        for(i=0; i<N; i++){
+		
+		// Take one row of shapes
+		for(j=0; j<M; j++)
+			shape[j] = shapes[i][j];
+		
+		// Multiply shapes
+		l = 1;
+		for(j=0; j<M; j++)
+			l *= shape[j];
 
-        for(i=0; i<M*N; i++){
-                T[i]=i-25;
-        }
+        	float *T = (float *)malloc(l * sizeof(float));
+        	float *D = (float *)malloc(l * sizeof(float));
 
-	printf("\n");
-	printf("Initial tensor:\n");
-        for(i=0; i<M; i++){
-                for(j=0; j<N; j++){
-                        printf("%.2f ", T[i*M+j]);
-                }
-                printf("\n");
-        }
-        printf("\n");
+		// Initialize tensor
+		srand(time(NULL));
+        	for(j=0; j<l; j++)
+                	T[j]=((float)rand() / (float)RAND_MAX) * 100 - 50;
 
-	relu(T, D, alpha, shape, 2);
+		// SCALAR VERSION
+                __asm__ __volatile__("rdinstret %0" : "=r"(start_instret));
+                __asm__ __volatile__("rdcycle %0"   : "=r"(start_cycles));
 
-	printf("\n");
-	printf("Final tensor:\n");
-        for(i=0; i<M; i++){
-                for(j=0; j<N; j++){
-                        printf("%.2f ", D[i*M+j]);
-                }
-                printf("\n");
-        }
-	printf("\n");
+		scalar_relu(T, D, alpha, shape, M);
+
+                __asm__ __volatile__("rdcycle %0"   : "=r"(end_cycles));
+                __asm__ __volatile__("rdinstret %0" : "=r"(end_instret));
+
+                uint64_t cycles1  = end_cycles  - start_cycles;
+                uint64_t instret1 = end_instret - start_instret;
+		
+                // VECTOR VERSION
+                __asm__ __volatile__("rdinstret %0" : "=r"(start_instret));
+                __asm__ __volatile__("rdcycle %0"   : "=r"(start_cycles));
+
+		relu(T, D, alpha, shape, M);
+                
+		__asm__ __volatile__("rdcycle %0"   : "=r"(end_cycles));
+                __asm__ __volatile__("rdinstret %0" : "=r"(end_instret));
+
+                free(T);
+                free(D);
+
+                uint64_t cycles2  = end_cycles  - start_cycles;
+                uint64_t instret2 = end_instret - start_instret;
+
+		fprintf(file, "{%d, ", shape[0]);
+		for(j=1; j<M-1; j++)
+			fprintf(file, "%d, ", shape[j]);
+		fprintf(file, "%d}\t", shape[M-1]);
+
+		fprintf(file, "%15.lu %15.lu %15.lu %15.lu %15.2f %15.2f\n", cycles1, cycles2, instret1, instret2, (float)cycles1/cycles2, (float)instret1/instret2);
+	}
 
         return 0;
 }
@@ -56,42 +195,86 @@ int main_relu(void){
 // Set the name of this function to main to run
 int main_axpy(void){
 	int i;
-	int N = 2073;
-	float *a = (float *)malloc(N * sizeof(float));
-	float *b = (float *)malloc(N * sizeof(float));
+	int N;
 	float c;
-	float alpha = 1;
-	float beta = 0;
-
-	for(i=0; i<N; i++){
-		a[i] = i;
-		b[i] = 1;
-	}
-
-	int sum = 0;
-	for(i=0; i<N; i++){
-		sum += i;
-		printf("%f %d\n", (float)i, sum);
-	}
-	printf("ATTENTION %d %d\n", sum, i);
 	
+	uint64_t start_cycles;
+        uint64_t start_instret;
+        uint64_t end_cycles;
+        uint64_t end_instret;
 
-	efficient_axpy(a, b, &c, N);
+	FILE *file = fopen("results.txt", "w");
+	fprintf(file, "%15s %15s %15s %15s %15s %15s %15s %15s %15s %15s %15s\n", "N", "cycles1", "cycles2", "cylces3", "instret1", "instret2", "instret3", "cyc1/cyc2", "inst1/inst2", "cyc1/cyc3", "inst1/inst3");
 
-	printf("Result: %.2f\n", c);
+	for(N=10; N<= 1000; N+=10){
+		float *a = (float *)malloc(N * sizeof(float));
+		float *b = (float *)malloc(N * sizeof(float));
+
+		srand(time(NULL));
+        	for(i=0; i<N; i++){
+                	a[i]=((float)rand() / (float)RAND_MAX) * 100 - 50;
+                	b[i]=((float)rand() / (float)RAND_MAX) * 100 - 50;
+		}
+
+		// SCALAR VERSION
+                __asm__ __volatile__("rdinstret %0" : "=r"(start_instret));
+                __asm__ __volatile__("rdcycle %0"   : "=r"(start_cycles));
+
+                scalar_axpy(a, b, &c, N);
+
+                __asm__ __volatile__("rdcycle %0"   : "=r"(end_cycles));
+                __asm__ __volatile__("rdinstret %0" : "=r"(end_instret));
+
+                uint64_t cycles1  = end_cycles  - start_cycles;
+                uint64_t instret1 = end_instret - start_instret;
+
+                // VECTOR VERSION
+                __asm__ __volatile__("rdinstret %0" : "=r"(start_instret));
+                __asm__ __volatile__("rdcycle %0"   : "=r"(start_cycles));
+
+		axpy(a, b, &c, N);
+
+                __asm__ __volatile__("rdcycle %0"   : "=r"(end_cycles));
+                __asm__ __volatile__("rdinstret %0" : "=r"(end_instret));
+
+                uint64_t cycles2  = end_cycles  - start_cycles;
+                uint64_t instret2 = end_instret - start_instret;
+	
+		// IMPROVED VERSION
+		__asm__ __volatile__("rdinstret %0" : "=r"(start_instret));
+                __asm__ __volatile__("rdcycle %0"   : "=r"(start_cycles));
+
+                efficient_axpy(a, b, &c, N);
+
+                __asm__ __volatile__("rdcycle %0"   : "=r"(end_cycles));
+                __asm__ __volatile__("rdinstret %0" : "=r"(end_instret));
+
+                uint64_t cycles3  = end_cycles  - start_cycles;
+                uint64_t instret3 = end_instret - start_instret;
+	
+		free(a);
+		free(b);
+
+		fprintf(file, "%15d %15.lu %15.lu %15.lu %15.lu %15.lu %15.lu %15.2f %15.2f %15.2f %15.2f\n", N, cycles1, cycles2, cycles3, instret1, instret2, instret3, (float)cycles1/cycles2, (float)instret1/instret2, (float)cycles1/cycles3, (float)instret1/instret3);
+
+	}
 
 	return 0;
 }
 
 
 // Set the name of this function to main to run
-int main(void){
+int main_sum(void){
 	int i;
 	int j;
 	int ndims = 1;
 	int ntensors = 5;
 	int *shape = (int *)malloc(ndims * sizeof(int));
 	shape[0] = 129;
+	uint64_t start_cycles;
+	uint64_t start_instret;
+	uint64_t end_cycles;
+	uint64_t end_instret;
 
 	float *out = (float *)malloc(shape[0] * sizeof(float));	// Shapes should be multiplied if more than one
 
@@ -115,16 +298,39 @@ int main(void){
 			tensors[i][j] = (i+1)*(j+1);
 		}
 	}
-	
+
+	__asm__ __volatile__("rdinstret %0" : "=r"(start_instret));
+	__asm__ __volatile__("rdcycle %0"   : "=r"(start_cycles));
+
 	// Sum of tensors
 	sum(tensors, out, shape, ndims, ntensors);
+
+	__asm__ __volatile__("rdcycle %0"   : "=r"(end_cycles));
+	__asm__ __volatile__("rdinstret %0" : "=r"(end_instret));
+
+	uint64_t cycles  = end_cycles  - start_cycles;
+	uint64_t instret = end_instret - start_instret;
 
 	// Print result
 	for(i=0; i<shape[0]; i++){
 		printf("%.2f ", out[i]);
 	}
 
+	printf("\nINSTRUCTIONS AND CYCLES: %lu %lu\n", instret, cycles);
+
 	return 0;
+}
+
+// ------------------------------------
+// ------------ FUNCTIONS  ------------
+// ------------------------------------
+
+void scalar_vector_sum(float *a, float *b, float *c, int N){
+    int i;
+    for(i=0; i<N; i++){
+        c[i] = a[i] + b[i];
+    }
+    return;
 }
 
 // Sum element-wise two vectors using vectorized instructions
@@ -136,7 +342,6 @@ void vector_sum(float *a, float *b, float *c, int N){
         __epi_2xf32 vc;
 
         for(i=0; i<N; i+=gvl){
-                printf("i=%d\n", i);
 		gvl = __builtin_epi_vsetvl(N-i, __epi_e32, __epi_m1);
                 va = __builtin_epi_vload_2xf32(&a[i], gvl);
                 vb = __builtin_epi_vload_2xf32(&b[i], gvl);
@@ -189,6 +394,13 @@ void efficient_triad(float *A, float *B, float *C, int M, int N){
         return;
 }
 
+void scalar_relu(float *T, float *D, float alpha, int *shape, int N){
+	int i;
+	int l = 1;
+        for(i=0; i<N; i++) l*=shape[i];
+	for(i=0; i<l; i++) D[i] = T[i] < 0? T[i] * alpha : T[i];
+}
+
 // Apply RELU function to all elements of a matrix
 void relu(float *T, float *D, float alpha, int *shape, int N){
         int i;
@@ -199,7 +411,7 @@ void relu(float *T, float *D, float alpha, int *shape, int N){
 	__epi_2xf32 v_alpha;
         __epi_2xf32 vc;
 	__epi_2xi1 mask;
-
+	
  	// Multiply all dims to get tensor's flat shape
 	l = 1;
 	for(i=0; i<N; i++){
@@ -221,8 +433,18 @@ void relu(float *T, float *D, float alpha, int *shape, int N){
 	return;
 }
 
+void scalar_axpy(float *a, float *b, float *c, int N){
+	int i;
+	*c = 0;
+	for(i=0; i<N; i++){
+		*c += a[i] * b[i];
+	}
+
+	return;
+}
+
 // Compute the inner product of two vectors
-void axpy(float *a, float *b, float *c, float alpha, float beta, int N){
+void axpy(float *a, float *b, float *c, int N){
 	int i;
 	int gvl;
 	__epi_2xf32 va;
@@ -243,9 +465,6 @@ void axpy(float *a, float *b, float *c, float alpha, float beta, int N){
 
 	// Store the first element of sum in c
 	__builtin_epi_vstore_2xf32(c, sum, 1);
-
-	// Final scalar calculations
-	*c = alpha * (*c) + beta;
 
 	return;
 }
@@ -366,61 +585,3 @@ void unrolled2_sum(float **tensors, float *out, int *shape, int ndims, int ntens
 
         return;
 } 
-
-// Unrolled sum element-wise a collection of tensors
-void unrolled4_sum(float **tensors, float *out, int *shape, int ndims, int ntensors){
-        int i;
-        int j;
-        int l;
-        int gvl;
-        __epi_2xf32 va1;
-        __epi_2xf32 va2;
-	__epi_2xf32 va3;
-        __epi_2xf32 va4;
-        __epi_2xf32 sum;
-
-        // Multiply all dims to get tensor's flat shape
-        l = 1;
-        for(i=0; i<ndims; i++){
-                l*=shape[i];
-        }
-
-        // Iterate over the gvl-sized batches
-        for(j=0; j<l; j+=gvl){
-                gvl = __builtin_epi_vsetvl(l-j, __epi_e32, __epi_m1);
-                sum = __builtin_epi_vbroadcast_2xf32(0.0, gvl);
-
-		// FACTOR 4
-                for (i = 0; i<ntensors/4; i += 4) {
-                        va1 = __builtin_epi_vload_2xf32(&(tensors[i][j]), gvl);
-                        va2 = __builtin_epi_vload_2xf32(&(tensors[i + 1][j]), gvl);
-			va3 = __builtin_epi_vload_2xf32(&(tensors[i + 2][j]), gvl);
-			va4 = __builtin_epi_vload_2xf32(&(tensors[i + 3][j]), gvl);
-
-                        sum = __builtin_epi_vfadd_2xf32(va1, sum, gvl);
-                        sum = __builtin_epi_vfadd_2xf32(va2, sum, gvl);
-			sum = __builtin_epi_vfadd_2xf32(va3, sum, gvl);
-                        sum = __builtin_epi_vfadd_2xf32(va4, sum, gvl);
-                }
-
-                // FACTOR 2
-                for (; i<ntensors/2; i += 2) {
-                        va1 = __builtin_epi_vload_2xf32(&(tensors[i][j]), gvl);
-                        va2 = __builtin_epi_vload_2xf32(&(tensors[i + 1][j]), gvl);
-
-                        sum = __builtin_epi_vfadd_2xf32(va1, sum, gvl);
-                        sum = __builtin_epi_vfadd_2xf32(va2, sum, gvl);
-                }
-
-                // FACTOR 1
-                for(; i<ntensors; i++){
-                        va1 = __builtin_epi_vload_2xf32(&(tensors[i][j]), gvl);
-                        sum = __builtin_epi_vfadd_2xf32(va1, sum, gvl);
-                }
-
-                // After the sum has been completed, store in out
-                __builtin_epi_vstore_2xf32(&out[j], sum, gvl);
-        }
-
-        return;
-}
