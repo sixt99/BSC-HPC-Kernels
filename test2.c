@@ -23,9 +23,12 @@ void unrolled2_sum(float **, float *, int *, int, int);
 // ---------- MAIN FUNCTIONS ----------
 // ------------------------------------
 
-// SUM OF TWO TENSORS 
+// SUM OF TWO VECTORS 
 int main_vec(void){
 	int i;
+	int j;
+	int k;
+	int repetitions = 5;
 	int N;
 	float *a;
 	float *b;
@@ -34,49 +37,67 @@ int main_vec(void){
         uint64_t start_instret;
         uint64_t end_cycles;
         uint64_t end_instret;
+	uint64_t cycles1;
+        uint64_t cycles2;
+        uint64_t instret1;
+        uint64_t instret2;
 	FILE *file = fopen("results.txt", "w");
 
 	fprintf(file, "%15s %15s %15s %15s %15s %15s %15s\n", "N", "cycles1", "cycles2", "instret1", "instret2", "cyc1/cyc2", "inst1/inst2");
 
-	for(N=5000; N<=15000; N+=5000){
-		float *a = (float *)malloc(N * sizeof(float));
-        	float *b = (float *)malloc(N * sizeof(float));
-        	float *c = (float *)malloc(N * sizeof(float));
+	for(j=0; j<100; j++){
 
-		srand(time(NULL));
-		for(i=0; i<N; i++){
-			a[i] = ((float)rand() / (float)RAND_MAX) * 100 - 50;
-			b[i] = ((float)rand() / (float)RAND_MAX) * 100 - 50;
+		cycles1 = UINT64_MAX;
+		cycles2 = UINT64_MAX;
+		instret1 = UINT64_MAX;
+		instret2 = UINT64_MAX;
+		for(k=0; k<repetitions; k++){	
+		
+			float *a = (float *)malloc(N * sizeof(float));
+        		float *b = (float *)malloc(N * sizeof(float));
+        		float *c = (float *)malloc(N * sizeof(float));
+
+			srand(time(NULL));
+			for(i=0; i<N; i++){
+				a[i] = ((float)rand() / (float)RAND_MAX) * 100 - 50;
+				b[i] = ((float)rand() / (float)RAND_MAX) * 100 - 50;
+			}
+
+			// SCALAR VERSION
+			__asm__ __volatile__("rdinstret %0" : "=r"(start_instret));
+        		__asm__ __volatile__("rdcycle %0"   : "=r"(start_cycles));
+
+			scalar_vector_sum(a, b, c, N);
+
+        		__asm__ __volatile__("rdcycle %0"   : "=r"(end_cycles));
+        		__asm__ __volatile__("rdinstret %0" : "=r"(end_instret));
+
+			if(cycles1 > end_cycles  - start_cycles) cycles1 = end_cycles  - start_cycles;
+			if(instret1 > end_instret - start_instret) instret1 = end_instret - start_instret;
+			//fprintf(file, "SCALAR");	
+			//fprintf(file, "we got %.lu %.lu\n", end_cycles  - start_cycles, end_instret - start_instret);
+			//fprintf(file, "we set %.lu %.lu\n", cycles1, instret1);
+
+			// VECTOR VERSION
+                	__asm__ __volatile__("rdinstret %0" : "=r"(start_instret));
+                	__asm__ __volatile__("rdcycle %0"   : "=r"(start_cycles));
+
+                	vector_sum(a, b, c, N);
+
+                	__asm__ __volatile__("rdcycle %0"   : "=r"(end_cycles));
+                	__asm__ __volatile__("rdinstret %0" : "=r"(end_instret));
+
+			if(cycles2 > end_cycles  - start_cycles) cycles2 = end_cycles  - start_cycles;
+                        if(instret2 > end_instret - start_instret) instret2 = end_instret - start_instret;
+			//fprintf(file, "VECTOR");
+			//fprintf(file, "we got %.lu %.lu\n", end_cycles  - start_cycles, end_instret - start_instret);
+                        //fprintf(file, "we set %.lu %.lu\n", cycles2, instret2);
+
+			free(a);
+                        free(b);
+                        free(c);
+
 		}
-
-		// SCALAR VERSION
-		__asm__ __volatile__("rdinstret %0" : "=r"(start_instret));
-        	__asm__ __volatile__("rdcycle %0"   : "=r"(start_cycles));
-
-		scalar_vector_sum(a, b, c, N);
-
-        	__asm__ __volatile__("rdcycle %0"   : "=r"(end_cycles));
-        	__asm__ __volatile__("rdinstret %0" : "=r"(end_instret));
-
-        	uint64_t cycles1  = end_cycles  - start_cycles;
-        	uint64_t instret1 = end_instret - start_instret;
-
-		// VECTOR VERSION
-                __asm__ __volatile__("rdinstret %0" : "=r"(start_instret));
-                __asm__ __volatile__("rdcycle %0"   : "=r"(start_cycles));
-
-                vector_sum(a, b, c, N);
-
-                __asm__ __volatile__("rdcycle %0"   : "=r"(end_cycles));
-                __asm__ __volatile__("rdinstret %0" : "=r"(end_instret));
-
-		free(a);
-		free(b);
-		free(c);
-
-                uint64_t cycles2  = end_cycles  - start_cycles;
-                uint64_t instret2 = end_instret - start_instret;
-
 		fprintf(file, "%15d %15.lu %15.lu %15.lu %15.lu %15.2f %15.2f\n", N, cycles1, cycles2, instret1, instret2, (float)cycles1/cycles2, (float)instret1/instret2);
 	}
 
@@ -88,7 +109,7 @@ int main(void){
         int i;
         int j;
 	int l;
-	int N = 5;
+	int N = 3;
 	int M = 3;
 
 	uint64_t start_cycles;
@@ -122,13 +143,11 @@ int main(void){
 		{256, 56, 56}
 	};
 
-	int shapes[5][3] = {
-                {1, 1, 120},
-                {5, 5, 16},
-                {1, 32, 32},
-                {14, 14, 6},
-                {2048, 7, 7}
-        };
+	int shapes[3][3] = {
+                {256, 56, 56},
+		{256, 56, 56},
+		{256, 56, 56}
+	};
 
         int *shape = (int *)malloc(M * sizeof(int));
         float alpha = 0.5;
@@ -206,7 +225,7 @@ int main_axpy(void){
 	FILE *file = fopen("results.txt", "w");
 	fprintf(file, "%15s %15s %15s %15s %15s %15s %15s %15s %15s %15s %15s\n", "N", "cycles1", "cycles2", "cylces3", "instret1", "instret2", "instret3", "cyc1/cyc2", "inst1/inst2", "cyc1/cyc3", "inst1/inst3");
 
-	for(N=10; N<= 1000; N+=10){
+	for(N=20; N<= 1000; N+=10){
 		float *a = (float *)malloc(N * sizeof(float));
 		float *b = (float *)malloc(N * sizeof(float));
 
