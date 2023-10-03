@@ -34,13 +34,13 @@ int main_vec(void){
 	float *b;
 	float *c;
 	uint64_t start_cycles;
-        uint64_t start_instret;
-        uint64_t end_cycles;
-        uint64_t end_instret;
+    uint64_t start_instret;
+    uint64_t end_cycles;
+    uint64_t end_instret;
 	uint64_t cycles1;
-        uint64_t cycles2;
-        uint64_t instret1;
-        uint64_t instret2;
+    uint64_t cycles2;
+    uint64_t instret1;
+    uint64_t instret2;
 	FILE *file = fopen("results.txt", "w");
 
 	fprintf(file, "%15s %15s %15s %15s %15s %15s %15s\n", "N", "cycles1", "cycles2", "instret1", "instret2", "cyc1/cyc2", "inst1/inst2");
@@ -105,7 +105,7 @@ int main_vec(void){
 }
 
 // RELU
-int main(void){
+int main_relu(void){
         int i;
         int j;
 	int l;
@@ -214,6 +214,7 @@ int main(void){
 // Set the name of this function to main to run
 int main_axpy(void){
 	int i;
+	int j;
 	int N;
 	float c;
 	
@@ -223,9 +224,11 @@ int main_axpy(void){
         uint64_t end_instret;
 
 	FILE *file = fopen("results.txt", "w");
-	fprintf(file, "%15s %15s %15s %15s %15s %15s %15s %15s %15s %15s %15s\n", "N", "cycles1", "cycles2", "cylces3", "instret1", "instret2", "instret3", "cyc1/cyc2", "inst1/inst2", "cyc1/cyc3", "inst1/inst3");
+	fprintf(file, "%15s %15s %15s %15s %15s %15s %15s %15s %15s %15s %15s\n", "N", "cycles1", "cycles2", "cycles3", "instret1", "instret2", "instret3", "cyc1/cyc2", "inst1/inst2", "cyc1/cyc3", "inst1/inst3");
 
-	for(N=20; N<= 1000; N+=10){
+	//for(N=100; N<= 1000; N+=100){
+	for(j=0; j<4; j++){
+		N=1000;
 		float *a = (float *)malloc(N * sizeof(float));
 		float *b = (float *)malloc(N * sizeof(float));
 
@@ -269,7 +272,7 @@ int main_axpy(void){
                 __asm__ __volatile__("rdinstret %0" : "=r"(end_instret));
 
                 uint64_t cycles3  = end_cycles  - start_cycles;
-                uint64_t instret3 = end_instret - start_instret;
+		uint64_t instret3 = end_instret - start_instret;
 	
 		free(a);
 		free(b);
@@ -340,16 +343,53 @@ int main_sum(void){
 	return 0;
 }
 
+int main(void){
+	int i;
+	int N=1000;
+	float *a = (float *)malloc(N * sizeof(float));
+        float *b = (float *)malloc(N * sizeof(float));
+	float c;
+	FILE *file = fopen("results.txt", "w");
+	uint64_t start_cycles;
+        uint64_t start_instret;
+        uint64_t end_cycles;
+        uint64_t end_instret;
+
+	for(i=0; i<N; i++){
+		a[i] = 1;
+		b[i] = 2;
+	}
+	
+	__asm__ __volatile__("rdinstret %0" : "=r"(start_instret));
+        __asm__ __volatile__("rdcycle %0"   : "=r"(start_cycles));
+
+        axpy(a, b, &c, N);
+
+        __asm__ __volatile__("rdcycle %0"   : "=r"(end_cycles));
+        __asm__ __volatile__("rdinstret %0" : "=r"(end_instret));
+
+	uint64_t cycles  = end_cycles  - start_cycles;
+        uint64_t instret = end_instret - start_instret;
+
+	fprintf(file, "%f\n", c);
+	fprintf(file, "%lu %lu\n", cycles, instret);
+
+	return 0;
+}
+
+		
 // ------------------------------------
 // ------------ FUNCTIONS  ------------
 // ------------------------------------
 
+// Sum element-wise two vectors
 void scalar_vector_sum(float *a, float *b, float *c, int N){
     int i;
     for(i=0; i<N; i++){
         c[i] = a[i] + b[i];
     }
-    return;
+
+	return;
 }
 
 // Sum element-wise two vectors using vectorized instructions
@@ -362,11 +402,13 @@ void vector_sum(float *a, float *b, float *c, int N){
 
         for(i=0; i<N; i+=gvl){
 		gvl = __builtin_epi_vsetvl(N-i, __epi_e32, __epi_m1);
-                va = __builtin_epi_vload_2xf32(&a[i], gvl);
-                vb = __builtin_epi_vload_2xf32(&b[i], gvl);
-                vc = __builtin_epi_vfadd_2xf32(va, vb, gvl);
-                __builtin_epi_vstore_2xf32(&c[i], vc, gvl);
+			va = __builtin_epi_vload_2xf32(&a[i], gvl);
+			vb = __builtin_epi_vload_2xf32(&b[i], gvl);
+			vc = __builtin_epi_vfadd_2xf32(va, vb, gvl);
+			__builtin_epi_vstore_2xf32(&c[i], vc, gvl);
         }
+
+		return;
 }
 
 // Sum element-wise two matrices
@@ -395,22 +437,22 @@ void triad(float A[][32], float B[][32], float C[][32], int M, int N){
 
 // Sum element-wise two matrices, now using vectorized instructions
 void efficient_triad(float *A, float *B, float *C, int M, int N){
-        int i;
+    int i;
 	int j;
-        int gvl;
-        __epi_2xf32 va;
-        __epi_2xf32 vb;
-        __epi_2xf32 vc;
+	int gvl;
+	__epi_2xf32 va;
+	__epi_2xf32 vb;
+	__epi_2xf32 vc;
 	
-        for(i=0; i<M*N; i+=gvl){
-       		gvl = __builtin_epi_vsetvl(M*N-i, __epi_e32, __epi_m1);
-                va = __builtin_epi_vload_2xf32(&A[i], gvl);
-                vb = __builtin_epi_vload_2xf32(&B[i], gvl);
-                vc = __builtin_epi_vfadd_2xf32(va, vb, gvl);
-                __builtin_epi_vstore_2xf32(&C[i], vc, gvl);
-        }
+	for(i=0; i<M*N; i+=gvl){
+		gvl = __builtin_epi_vsetvl(M*N-i, __epi_e32, __epi_m1);
+		va = __builtin_epi_vload_2xf32(&A[i], gvl);
+		vb = __builtin_epi_vload_2xf32(&B[i], gvl);
+		vc = __builtin_epi_vfadd_2xf32(va, vb, gvl);
+		__builtin_epi_vstore_2xf32(&C[i], vc, gvl);
+	}
 
-        return;
+	return;
 }
 
 void scalar_relu(float *T, float *D, float alpha, int *shape, int N){
@@ -418,6 +460,8 @@ void scalar_relu(float *T, float *D, float alpha, int *shape, int N){
 	int l = 1;
         for(i=0; i<N; i++) l*=shape[i];
 	for(i=0; i<l; i++) D[i] = T[i] < 0? T[i] * alpha : T[i];
+
+	return;
 }
 
 // Apply RELU function to all elements of a matrix
@@ -488,8 +532,7 @@ void axpy(float *a, float *b, float *c, int N){
 	return;
 }
 
-// Compute the EFFICIENT inner product of two vectors (using FMA)
-// This time we avoid the use of alpha and beta
+// Compute the EFFICIENT inner product of two vectors
 void efficient_axpy(float *a, float *b, float *c, int N){
         int i;
 	int gvl;
@@ -523,7 +566,7 @@ void efficient_axpy(float *a, float *b, float *c, int N){
 
 	__builtin_epi_vstore_2xf32(c, sum, 1);
 
-        return;
+    return;
 }
 
 
