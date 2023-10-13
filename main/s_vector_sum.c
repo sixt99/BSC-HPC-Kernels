@@ -19,12 +19,7 @@ int main(int argc, char *argv[]) {
         perror("Error opening the file");
         return 1;
     }
-
-    srand(time(NULL));
-    for (i = 0; i < N; i++) {
-        a[i] = ((float) rand() / (float) RAND_MAX) * 100 - 50;
-        b[i] = ((float) rand() / (float) RAND_MAX) * 100 - 50;
-    }
+    
     __asm__ __volatile__("rdinstret %0": "=r"(start_instret));
     __asm__ __volatile__("rdcycle %0": "=r"(start_cycles));
     scalar_vector_sum(a, b, c, N);

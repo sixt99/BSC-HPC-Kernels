@@ -21,12 +21,6 @@ int main(int argc, char *argv[]) {
     float * a = (float * ) malloc(N * sizeof(float));
     float * b = (float * ) malloc(N * sizeof(float));
 
-    srand(time(NULL));
-    for (i = 0; i < N; i++) {
-        a[i] = ((float) rand() / (float) RAND_MAX) * 100 - 50;
-        b[i] = ((float) rand() / (float) RAND_MAX) * 100 - 50;
-    }
-
     __asm__ __volatile__("rdinstret %0": "=r"(start_instret));
     __asm__ __volatile__("rdcycle %0": "=r"(start_cycles));
     optimized_axpy(a, b, & c, N);
