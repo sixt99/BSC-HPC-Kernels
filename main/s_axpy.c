@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include "kernels.c"
+#include "../kernels.c"
 
 int main(int argc, char *argv[]) {
     int i;

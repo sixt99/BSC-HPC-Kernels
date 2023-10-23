@@ -5,9 +5,10 @@
 int main(int argc, char *argv[]) {
     int i;
     int l;
-    float alpha = 0.5;
-    int M = argc - 1;
-    int * shape = (int * ) malloc(M * sizeof(int));
+    int ndims = argc - 1;
+    int axis = 0;
+    int is_log = 0;
+    int * shape = (int * ) malloc(ndims * sizeof(int));
     uint64_t start_cycles;
     uint64_t start_instret;
     uint64_t end_cycles;
@@ -22,16 +23,16 @@ int main(int argc, char *argv[]) {
     }
 
     // Gather numbers given in script
-    for (i = 0; i < M; i++)
+    for (i = 0; i < ndims; i++)
         shape[i] = atoi(argv[i + 1]);
 
     // Create a string describing the shape
     char shape_str[100] = "{";
-    for (i = 0; i < M; i++) {
+    for (i = 0; i < ndims; i++) {
         char str[20];
         sprintf(str, "%d", shape[i]);
         strcat(shape_str, str);
-        if (i < M - 1) {
+        if (i < ndims - 1) {
             strcat(shape_str, ",");
         }
     }
@@ -39,7 +40,7 @@ int main(int argc, char *argv[]) {
 
     // Multiply shapes
     l = 1;
-    for (i = 0; i < M; i++)
+    for (i = 0; i < ndims; i++)
         l *= shape[i];
         
     float * T = (float * ) malloc(l * sizeof(float));
@@ -50,7 +51,7 @@ int main(int argc, char *argv[]) {
 
     __asm__ __volatile__("rdinstret %0": "=r"(start_instret));
     __asm__ __volatile__("rdcycle %0": "=r"(start_cycles));
-    scalar_relu(T, D, alpha, shape, M);
+    softmax(T, D, shape, ndims, axis, is_log);
     __asm__ __volatile__("rdcycle %0": "=r"(end_cycles));
     __asm__ __volatile__("rdinstret %0": "=r"(end_instret));
 
@@ -60,7 +61,7 @@ int main(int argc, char *argv[]) {
     free(T);
     free(D);
 
-    fprintf(file, "%15s, %15s, %15d, %15lu, %15lu\n", "Scalar RELU", shape_str, l, cycles, instret);
+    fprintf(file, "%15s, %15s, %15d, %15d, %15d, %15lu, %15lu\n", "Vector softmax", shape_str, l, axis, is_log, cycles, instret);
 
     fclose(file);
 

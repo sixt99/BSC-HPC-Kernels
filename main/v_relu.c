@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <string.h>
-#include "kernels.c"
+#include "../kernels.c"
 
 int main(int argc, char *argv[]) {
     int i;
@@ -44,6 +44,9 @@ int main(int argc, char *argv[]) {
         
     float * T = (float * ) malloc(l * sizeof(float));
     float * D = (float * ) malloc(l * sizeof(float));
+
+    for(i = 0; i < l; i++)
+        T[i] = i % 100 - 50;
 
     __asm__ __volatile__("rdinstret %0": "=r"(start_instret));
     __asm__ __volatile__("rdcycle %0": "=r"(start_cycles));
