@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --partition=fpga-sdv
 #SBATCH --nodes=1
-#SBATCH --time=2:00:00
+#SBATCH --time=10:00:00
 
 current_datetime=$(date +"%Y-%m-%d %H:%M:%S")
 printf "\nRun $current_datetime:\n" >> results.txt
@@ -10,7 +10,7 @@ X86_HOST="`hostname`"
 SDV_HOST="fpga-sdv-`echo ${X86_HOST} | cut -d '-' -f 2`"
 
 # VECTOR SUM
-printf "kind,N,cycles,instructions\n"
+printf "kind,N,cycles,instructions\n" >> results.txt
 
 for ((N = 20000; N <= 500000; N+=20000)); do
   ssh -o StrictHostKeyChecking=no ${SDV_HOST} "./s_vector_sum $N"
@@ -20,7 +20,7 @@ for ((N = 20000; N <= 500000; N+=20000)); do
 done
 
 # RELU
-printf "kind,shape,size,cycles,instructions\n"
+printf "kind,shape,size,cycles,instructions\n" >> results.txt
 ssh -o StrictHostKeyChecking=no ${SDV_HOST} "./s_relu 1 1 12O"
 ssh -o StrictHostKeyChecking=no ${SDV_HOST} "./s_relu 5 5 16"
 ssh -o StrictHostKeyChecking=no ${SDV_HOST} "./s_relu 1 32 32"
@@ -66,7 +66,7 @@ ssh -o StrictHostKeyChecking=no ${SDV_HOST} "./v_relu 1 512 28 28"
 ssh -o StrictHostKeyChecking=no ${SDV_HOST} "./v_relu 1 256 56 56"
 
 # AXPY
-printf "kind,N,cycles,instruction\n"
+printf "kind,N,cycles,instruction\n" >> results.txt
 for ((N = 20000; N <= 500000; N+=20000)); do
   ssh -o StrictHostKeyChecking=no ${SDV_HOST} "./s_axpy $N"
 done
@@ -78,7 +78,7 @@ for ((N = 20000; N <= 500000; N+=20000)); do
 done
 
 # SUM
-printf "kind,shape,size,ntensors,cycles,instructions\n"
+printf "kind,shape,size,ntensors,cycles,instructions\n" >> results.txt
 ssh -o StrictHostKeyChecking=no ${SDV_HOST} "./s_sum 1 1 12O"
 ssh -o StrictHostKeyChecking=no ${SDV_HOST} "./s_sum 5 5 16"
 ssh -o StrictHostKeyChecking=no ${SDV_HOST} "./s_sum 1 32 32"

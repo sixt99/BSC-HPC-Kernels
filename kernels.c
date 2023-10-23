@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <time.h>
+#include <math.h>
 
 // Sum element-wise two vectors
 void scalar_vector_sum(float * a, float * b, float * c, int N) {
@@ -98,9 +99,8 @@ void relu(float * T, float * D, float alpha, int * shape, int N) {
 
     // Multiply all dims to get tensor's flat shape
     l = 1;
-    for (i = 0; i < N; i++) {
+    for (i = 0; i < N; i++)
         l *= shape[i];
-    }
 
     // Initialize auxiliar vectors
     v_zero = __builtin_epi_vbroadcast_2xf32(0, l);
@@ -286,6 +286,160 @@ void unrolled2_sum(float ** tensors, float * out, int * shape, int ndims, int nt
         // After the sum has been completed, store in out
         __builtin_epi_vstore_2xf32( & out[j], sum, gvl);
     }
+
+    return;
+}
+
+void scalar_dense(float * a, float * b, float * c, int * shape_a, int * shape_b){
+    int i;
+    int j;
+    int k;
+    int sum;
+    int A = shape_a[0];
+    int B = shape_a[1];
+    int C = shape_b[1];
+
+    for(i = 0; i<A; i++)
+    for(j = 0; j<C; j++){
+        sum = 0;
+        for (k = 0; k < B; k++)
+            sum += a[i * B + k] * b[k * C + j];
+        c[i * C + j] = sum;
+    }
+
+    return;
+}
+
+void dense(float * a, float * b, float * c, int * shape_a, int * shape_b) {
+    int i;
+    int j;
+    int k;
+    int gvl;
+    int A = shape_a[0];
+    int B = shape_a[1];
+    int C = shape_b[1];
+    __epi_2xf32 va;
+    __epi_2xf32 vb;
+
+    // Transpose b
+    float * b_transposed = (float * ) malloc(B*C * sizeof(float));
+    for(i = 0; i < B; i++)
+    for(j = 0; j < C; j++)
+        b_transposed[j*B+i] = b[i*C+j];
+
+    for(i = 0; i < A; i++){
+        for(j = 0; j < C; j++){
+
+            // Initialize sum to zero and create zero_vec
+            gvl = __builtin_epi_vsetvl(B, __epi_e32, __epi_m1);
+            __epi_2xf32 sum = __builtin_epi_vbroadcast_2xf32(0.0, gvl);
+            __epi_2xf32 zero_vec = __builtin_epi_vbroadcast_2xf32(0.0, gvl);
+
+            // Start inner products
+            // Note: we separate the last iteration, since tail agnostic functionality is not available
+            for (k = 0; k < B / gvl; k++) {
+                va = __builtin_epi_vload_2xf32( a + i * B + k * gvl, gvl); // Load a
+                vb = __builtin_epi_vload_2xf32( b_transposed + j * B + k * gvl, gvl); // Load b
+                sum = __builtin_epi_vfmacc_2xf32(sum, va, vb, gvl); // Accumulate products
+            }
+
+            // First reduction
+            sum = __builtin_epi_vfredosum_2xf32(sum, zero_vec, gvl);
+
+            if (B % gvl > 0) {
+                va = __builtin_epi_vload_2xf32( a + i * B + k * gvl, B % gvl); // Load a
+                vb = __builtin_epi_vload_2xf32( b_transposed + j * B + k * gvl, B % gvl); // Load b
+                sum = __builtin_epi_vfmacc_2xf32(sum, va, vb, B % gvl); // Accumulate products
+
+                // Second reduction
+                sum = __builtin_epi_vfredosum_2xf32(sum, zero_vec, B % gvl);
+            }
+
+            __builtin_epi_vstore_2xf32(c + A*i + j, sum, 1);
+
+        }
+    }
+
+    return;
+}
+
+void dense2(float * a, float * b, float * c, int * shape_a, int * shape_b) {
+    int i;
+    int j;
+    int k;
+    int gvl;
+    int A = shape_a[0];
+    int B = shape_a[1];
+    int C = shape_b[1];
+    __epi_2xf32 va;
+    __epi_2xf32 vb;
+
+    for(i = 0; i < A; i++){
+        for(j = 0; j < C; j++){
+
+            // Initialize sum to zero and create zero_vec
+            gvl = __builtin_epi_vsetvl(B, __epi_e32, __epi_m1);
+            __epi_2xf32 sum = __builtin_epi_vbroadcast_2xf32(0.0, gvl);
+            __epi_2xf32 zero_vec = __builtin_epi_vbroadcast_2xf32(0.0, gvl);
+
+            // Start inner products
+            // Note: we separate the last iteration, since tail agnostic functionality is not available
+            for (k = 0; k < B / gvl; k++) {
+                va = __builtin_epi_vload_2xf32( a + i * B + k * gvl, gvl); // Load a
+                vb = __builtin_epi_vload_nt_strided_2xf32( b + C * k * gvl + j, C*4, gvl); // Load b
+                sum = __builtin_epi_vfmacc_2xf32(sum, va, vb, gvl); // Accumulate products
+            }
+
+            // First reduction
+            sum = __builtin_epi_vfredosum_2xf32(sum, zero_vec, gvl);
+
+            if (B % gvl > 0) {
+                va = __builtin_epi_vload_2xf32( a + i * B + k * gvl, B % gvl); // Load a
+                vb = __builtin_epi_vload_nt_strided_2xf32( b + C * k * gvl + j, C*4, B % gvl); // Load b
+                sum = __builtin_epi_vfmacc_2xf32(sum, va, vb, B % gvl); // Accumulate products
+
+                // Second reduction
+                sum = __builtin_epi_vfredosum_2xf32(sum, zero_vec, B % gvl);
+            }
+
+            __builtin_epi_vstore_2xf32(c + A*i + j, sum, 1);
+
+        }
+    }
+
+    return;
+}
+
+void scalar_softmax(float * T, float * D, int * shape, int ndims, int axis, int is_log){
+    int i;
+    int j;
+    int stride;
+    int sum;
+    int l = 1;
+    for (i = 0; i < ndims; i++)
+        l *= shape[i];
+
+    for (i = 0; i < l; i++)
+        D[i] = exp(T[i]);
+
+    // Compute the stride
+    stride = 1;
+    for (i = 0; i < axis; i++)
+        stride *= shape[ndims-1-i];
+
+    // Normalize according to the axis
+    for (i = 0; i < l/shape[ndims-1-axis]; i++){
+        sum = 0;
+        for (j = 0; j < shape[ndims-1-axis]; j+=stride)
+            sum += D[j];
+        for (j = 0; j < shape[ndims-1-axis]; j+=stride)
+            D[j]/=sum;
+    }
+
+    // Logsoftmax
+    if(is_log)
+        for (i=0; i<l; i++)
+            D[i] = log(D[i]);
 
     return;
 }
