@@ -410,6 +410,7 @@ void dense2(float * a, float * b, float * c, int * shape_a, int * shape_b) {
     return;
 }
 
+/*
 void scalar_softmax(float * T, float * D, int * shape, int ndims, int axis, int is_log){
     int i;
     int j;
@@ -440,6 +441,226 @@ void scalar_softmax(float * T, float * D, int * shape, int ndims, int axis, int 
     if(is_log)
         for (i=0; i<l; i++)
             D[i] = log(D[i]);
+
+    return;
+}
+*/
+
+void softmax(float * T, float * D, int * shape, int ndims, int axis, int is_log){
+    int i;
+    int j;
+    int stride;
+    int sum;
+    int gvl;
+    int use_lagrange = 1;
+    float log2e = 1.44269504088896;
+
+    __epi_2xf32 log2e_vector;
+    __epi_2xf32 va;
+    __epi_2xf32 vb;
+    __epi_2xi32 integers;
+    __epi_2xi32 zeros;
+    __epi_2xi32 ones;
+    __epi_2xf32 float_ones;
+    __epi_2xi32 negative_ones;
+    __epi_2xi1 positive_mask;
+    __epi_2xi1 negative_mask;
+    __epi_2xf32 exponential;
+    
+    int l = 1;
+    for (i = 0; i < ndims; i++)
+        l *= shape[i];
+
+    // Apply the exponential function to every element
+    for (i = 0; i < l; i += gvl) {
+        gvl = __builtin_epi_vsetvl(l - i, __epi_e32, __epi_m1);
+
+        // Define some constant vectors
+        log2e_vector = __builtin_epi_vbroadcast_2xf32(log2e, gvl);
+        zeros = __builtin_epi_vbroadcast_2xi32(0, gvl);
+        ones = __builtin_epi_vbroadcast_2xi32(1, gvl);
+        float_ones = __builtin_epi_vbroadcast_2xf32(1.0f, gvl);
+        negative_ones = __builtin_epi_vbroadcast_2xi32(-1, gvl);
+
+        va = __builtin_epi_vload_2xf32(T + i, gvl);
+        va = __builtin_epi_vfmul_2xf32(va, log2e_vector, gvl); // Multiply va by log_2(e)      
+        integers = __builtin_epi_vfcvt_x_f_2xi32_2xf32(va, gvl); // Get the closest integer for each element in va
+        vb = __builtin_epi_vfcvt_f_x_2xf32_2xi32(integers, gvl); // Convert such integers to float again
+        va = __builtin_epi_vfsub_2xf32(va, vb, gvl); // Turn va into values from -0.5 to 0.5
+
+        if(use_lagrange){
+            // Apply Lagrange polynomial
+            int n_coef = 9;
+            float coef[9] = {1.0000000000000000e-00,
+                             6.9314718055644076e-01,
+                             2.4022650695885897e-01,
+                             5.5504108983956503e-02,
+                             9.6181291296726056e-03, 
+                             1.3333490172481835e-03,
+                             1.5403483396430839e-04,
+                             1.5300514484076787e-05, 
+                             1.3248566018962227e-06};
+
+            exponential = __builtin_epi_vbroadcast_2xf32(coef[n_coef-1], gvl);
+            for(j = n_coef-2; j >= 0; --j){
+                vb = __builtin_epi_vbroadcast_2xf32(coef[j], gvl);
+                exponential = __builtin_epi_vfmacc_2xf32(vb, va, exponential, gvl);
+            }
+        } else {
+            // Apply Taylor's formula
+            int order = 10;
+            exponential = float_ones;
+            for(j = order; j>=1; --j){
+                vb = __builtin_epi_vbroadcast_2xf32(j, gvl);
+                vb = __builtin_epi_vfdiv_2xf32(va, vb, gvl);
+                exponential = __builtin_epi_vfmacc_2xf32(float_ones, vb, exponential, gvl);
+            }
+        }
+
+        // Bit shift
+        positive_mask = __builtin_epi_vmsgt_2xi32(integers, zeros, gvl); // Create a 'bigger than zero' mask
+        negative_mask = __builtin_epi_vmsgt_2xi32(zeros, integers, gvl); // Create a 'smaller than zero' mask
+
+        integers = __builtin_epi_vmul_2xi32_mask(integers, integers, negative_ones, negative_mask, gvl); // Absolute value
+        integers = __builtin_epi_vsll_2xi32(ones, integers, gvl); // Powers of two        
+        va = __builtin_epi_vfcvt_f_x_2xf32_2xi32(integers, gvl); // To float
+        va = __builtin_epi_vfdiv_2xf32_mask(va, float_ones, va, negative_mask, gvl); // Inverse of the negative values
+        exponential = __builtin_epi_vfmul_2xf32(va, exponential, gvl);
+
+        // Store
+        __builtin_epi_vstore_2xf32(D + i, exponential, gvl);
+
+    }
+
+    /*
+
+    // Compute the stride
+    stride = 1;
+    for (i = 0; i < axis; i++)
+        stride *= shape[ndims-1-i];
+
+    // Normalize according to the axis
+    for (i = 0; i < l/shape[ndims-1-axis]; i++){
+        sum = 0;
+        for (j = 0; j < shape[ndims-1-axis]; j+=stride)
+            sum += D[j];
+        for (j = 0; j < shape[ndims-1-axis]; j+=stride)
+            D[j]/=sum;
+    }
+
+    // Logsoftmax
+    if(is_log)
+        for (i=0; i<l; i++)
+            D[i] = log(D[i]);
+
+    */
+
+    return;
+}
+
+#define R_LN2f 1.442695040888963407359924681001892137426645954152985934135449406931f
+#define L2Uf 0.693145751953125f
+#define L2Lf 1.428606765330187045e-06f
+
+void softmax2(float * T, float * D, int * shape, int ndims, int axis, int is_log){
+    int i;
+    int j;
+    int stride;
+    int sum;
+    int gvl;
+
+    __epi_2xf32 d;
+    __epi_2xf32 d_R_LN2f;
+    __epi_2xf32 vector_R_LN2f;
+    __epi_2xf32 q;
+    __epi_2xi32 integers;
+    __epi_2xf32 const1;
+    __epi_2xf32 const2;
+    __epi_2xf32 s;
+    __epi_2xf32 u;
+    __epi_2xf32 powers;
+
+    __epi_2xi32 zeros;
+    __epi_2xi32 ones;
+    __epi_2xf32 float_ones;
+    __epi_2xi32 negative_ones;
+    __epi_2xi1 mask;
+    
+    int l = 1;
+    for (i = 0; i < ndims; i++)
+        l *= shape[i];
+
+    // Apply the exponential function to every element
+    for (i = 0; i < l; i += gvl) {
+        gvl = __builtin_epi_vsetvl(l - i, __epi_e32, __epi_m1);
+        d = __builtin_epi_vload_2xf32(T + i, gvl);
+        vector_R_LN2f = __builtin_epi_vbroadcast_2xf32(R_LN2f, gvl);
+        d_R_LN2f = __builtin_epi_vfmul_2xf32(d, vector_R_LN2f, gvl); // Multiply d by 1/ln(2)
+        integers = __builtin_epi_vfcvt_x_f_2xi32_2xf32(d_R_LN2f, gvl); // Get the closest integer for each element in d_R_LN2f
+        q = __builtin_epi_vfcvt_f_x_2xf32_2xi32(integers, gvl); // Convert such integers to float again
+        const1 = __builtin_epi_vbroadcast_2xf32(-L2Uf, gvl); 
+        const2 = __builtin_epi_vbroadcast_2xf32(-L2Lf, gvl); 
+        s = __builtin_epi_vfmacc_2xf32(d, q, const1, gvl);
+        s = __builtin_epi_vfmacc_2xf32(s, q, const2, gvl);
+
+        // Apply Lagrange polynomial
+        int n_coef = 8;
+        float coef[8] = {0.000198527617612853646278381,
+                         0.00139304355252534151077271,
+                         0.00833336077630519866943359,
+                         0.0416664853692054748535156,
+                         0.166666671633720397949219, 
+                         0.5,
+                         1.0,
+                         1.0};
+
+        u = __builtin_epi_vbroadcast_2xf32(coef[0], gvl);
+        for(j = 1; j < n_coef; ++j){
+            const1 = __builtin_epi_vbroadcast_2xf32(coef[j], gvl);
+            u = __builtin_epi_vfmacc_2xf32(const1, u, s, gvl);
+        }
+
+        // Define some constant vectors
+        zeros = __builtin_epi_vbroadcast_2xi32(0, gvl);
+        ones = __builtin_epi_vbroadcast_2xi32(1, gvl);
+        float_ones = __builtin_epi_vbroadcast_2xf32(1.0f, gvl);
+        negative_ones = __builtin_epi_vbroadcast_2xi32(-1, gvl);
+
+        // Bit shift
+        mask = __builtin_epi_vmsgt_2xi32(zeros, integers, gvl); // Create a 'smaller than zero' mask
+        integers = __builtin_epi_vmul_2xi32_mask(integers, integers, negative_ones, mask, gvl); // Absolute value
+
+        integers = __builtin_epi_vsll_2xi32(ones, integers, gvl); // Powers of two        
+        powers = __builtin_epi_vfcvt_f_x_2xf32_2xi32(integers, gvl); // To float
+        powers = __builtin_epi_vfdiv_2xf32_mask(powers, float_ones, powers, mask, gvl); // Inverse of the negative values
+        u = __builtin_epi_vfmul_2xf32(u, powers, gvl);
+
+        // Store
+        __builtin_epi_vstore_2xf32(D + i, u, gvl);
+    }
+
+    /*
+
+    // Compute the stride
+    stride = 1;
+    for (i = 0; i < axis; i++)
+        stride *= shape[ndims-1-i];
+
+    // Normalize according to the axis
+    for (i = 0; i < l/shape[ndims-1-axis]; i++){
+        sum = 0;
+        for (j = 0; j < shape[ndims-1-axis]; j+=stride)
+            sum += D[j];
+        for (j = 0; j < shape[ndims-1-axis]; j+=stride)
+            D[j]/=sum;
+    }
+
+    // Logsoftmax
+    if(is_log)
+        for (i=0; i<l; i++)
+            D[i] = log(D[i]);
+
+    */
 
     return;
 }
