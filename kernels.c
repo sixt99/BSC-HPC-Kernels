@@ -1,3 +1,4 @@
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -566,7 +567,7 @@ void softmax2(float * T, float * D, int * shape, int ndims, int axis, int is_log
     int i;
     int j;
     int stride;
-    int sum;
+    float sum;
     int gvl;
 
     __epi_2xf32 d;
@@ -594,7 +595,7 @@ void softmax2(float * T, float * D, int * shape, int ndims, int axis, int is_log
     for (i = 0; i < l; i += gvl) {
         gvl = __builtin_epi_vsetvl(l - i, __epi_e32, __epi_m1);
         d = __builtin_epi_vload_2xf32(T + i, gvl);
-        vector_R_LN2f = __builtin_epi_vbroadcast_2xf32(R_LN2f, gvl);
+        vector_R_LN2f = __builtin_epi_vbroadcast_2xf32(R_LN2f, gvl); // Create a vector full of 1/ln(2)
         d_R_LN2f = __builtin_epi_vfmul_2xf32(d, vector_R_LN2f, gvl); // Multiply d by 1/ln(2)
         integers = __builtin_epi_vfcvt_x_f_2xi32_2xf32(d_R_LN2f, gvl); // Get the closest integer for each element in d_R_LN2f
         q = __builtin_epi_vfcvt_f_x_2xf32_2xi32(integers, gvl); // Convert such integers to float again
@@ -639,27 +640,43 @@ void softmax2(float * T, float * D, int * shape, int ndims, int axis, int is_log
         __builtin_epi_vstore_2xf32(D + i, u, gvl);
     }
 
-    /*
-
     // Compute the stride
-    stride = 1;
-    for (i = 0; i < axis; i++)
-        stride *= shape[ndims-1-i];
+    stride = l;
+    for (i = 0; i < axis+1; i++)
+        stride /= shape[i];
+
+    printf("STRIDE:\n");
+    printf("%d\n", stride);
+    printf("%d\n", l/shape[ndims-1-axis]);
+    printf("%d\n", shape[ndims-1-axis]);
+
+    printf("EXP MATRIX:\n");
+    printf("\n");
+    for(i = 0; i<shape[0]; ++i){
+        for(j = 0; j<shape[1]; ++j){
+            printf("%15.2f, ", D[shape[1]*i+j]);
+        }
+        printf("\n");
+    }
+    printf("\n");
 
     // Normalize according to the axis
-    for (i = 0; i < l/shape[ndims-1-axis]; i++){
+    int mult = axis != 0 ? shape[axis] : 1;
+    for (i = 0; i < l/shape[axis]; i++){
         sum = 0;
-        for (j = 0; j < shape[ndims-1-axis]; j+=stride)
-            sum += D[j];
-        for (j = 0; j < shape[ndims-1-axis]; j+=stride)
-            D[j]/=sum;
+        for (j = 0; j < shape[axis]; j++){
+            printf("%d\n", i+j);
+            sum += D[mult * i + j*stride];
+        }
+        for (j = 0; j < shape[axis]; j++)
+            D[mult * i + j*stride]/=sum;
     }
 
     // Logsoftmax
+    /*
     if(is_log)
         for (i=0; i<l; i++)
             D[i] = log(D[i]);
-
     */
 
     return;
