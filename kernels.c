@@ -453,6 +453,7 @@ void softmax(float * T, float * D, int * shape, int ndims, int axis, int is_log)
     #define vload(ptr)                  __builtin_epi_vload_2xf32(ptr, gvl)
     #define vstore(ptr, v)              __builtin_epi_vstore_2xf32(ptr, v, gvl)
     #define vfadd(a, b)                 __builtin_epi_vfadd_2xf32(a, b, gvl)
+    #define vfsub(a, b)                 __builtin_epi_vfsub_2xf32(a, b, gvl)
     #define vfmul(a, b)                 __builtin_epi_vfmul_2xf32(a, b, gvl)
     #define vmul_mask(a, b, c, mask)    __builtin_epi_vmul_2xi32_mask(a, b, c, mask, gvl)
     #define vfdiv(a, b)                 __builtin_epi_vfdiv_2xf32(a, b, gvl)
@@ -464,6 +465,7 @@ void softmax(float * T, float * D, int * shape, int ndims, int axis, int is_log)
     #define vfmacc(a, b, c)             __builtin_epi_vfmacc_2xf32(a, b, c, gvl)
     #define vmsgt(a, b)                 __builtin_epi_vmsgt_2xi32(a, b, gvl)
     #define vsll(a, b)                  __builtin_epi_vsll_2xi32(a, b, gvl)
+    #define vfredmax(a, b)              __builtin_epi_vfredmax_2xf32(a, b, gvl)
     
     #define R_LN2f 1.442695040888963407359924681001892137426645954152985934135449406931f
     #define L2Uf 0.693145751953125f
@@ -477,21 +479,35 @@ void softmax(float * T, float * D, int * shape, int ndims, int axis, int is_log)
     int l = 1;
     for (i = 0; i < ndims; i++)
         l *= shape[i];
+    float * aux = (float *)malloc(l * sizeof(float));
 
     __epi_2xf32 d;
+    __epi_2xf32 vmax;
     __epi_2xf32 d_R_LN2f;
     __epi_2xf32 q;
     __epi_2xi32 integers;
     __epi_2xf32 s;
     __epi_2xf32 u;
-    __epi_2xf32 tmp;
     __epi_2xf32 powers;
     __epi_2xi1 mask;
+
+    // Compute vmax
+    vmax = vfbroadcast(-1e8f);
+    for (i = 0; i < l; i += gvl) {
+        gvl = vsetvl(l - i);
+        d = vload(T + i);
+        vmax = vfredmax(d, vmax);
+    }
+    vstore(aux, vmax);
+    vmax = vfbroadcast(aux[0]);
 
     // Apply the exponential function to every element
     for (i = 0; i < l; i += gvl) {
         gvl = vsetvl(l - i);
         d = vload(T + i);
+        d = vfsub(d, vmax); // Normalize
+
+        // Decompose e^x into 2^q * e^s
         d_R_LN2f = vfmul(d, vfbroadcast(R_LN2f));   // Multiply d by 1/ln(2)
         integers = vf2i(d_R_LN2f);                  // Get the closest integer for each element in d_R_LN2f
         q = vi2f(integers);                         // Convert such integers to float again
@@ -508,6 +524,7 @@ void softmax(float * T, float * D, int * shape, int ndims, int axis, int is_log)
                         0.5,
                         1.0,
                         1.0};
+
         u = vfbroadcast(coef[0]);
         for(j = 1; j < n_coef; ++j)
             u = vfmacc(vfbroadcast(coef[j]), u, s);
