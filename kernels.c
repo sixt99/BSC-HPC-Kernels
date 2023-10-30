@@ -448,7 +448,7 @@ void scalar_softmax(float * T, float * D, int * shape, int ndims, int axis, int 
 */
 
 void softmax(float * T, float * D, int * shape, int ndims, int axis, int is_log){
-    
+
     #define vsetvl(avl)                 __builtin_epi_vsetvl(avl, __epi_e32, __epi_m1)
     #define vload(ptr)                  __builtin_epi_vload_2xf32(ptr, gvl)
     #define vstore(ptr, v)              __builtin_epi_vstore_2xf32(ptr, v, gvl)
@@ -473,7 +473,7 @@ void softmax(float * T, float * D, int * shape, int ndims, int axis, int is_log)
     int j;
     int stride;
     int gvl;
-    int order;
+    int n_coef;
     int l = 1;
     for (i = 0; i < ndims; i++)
         l *= shape[i];
@@ -499,12 +499,18 @@ void softmax(float * T, float * D, int * shape, int ndims, int axis, int is_log)
         s = vfmacc(s, q, vfbroadcast(-L2Lf));
 
         // Apply Taylor polynomial
-        order = 5;
-        u = vfbroadcast(1.0f);
-        for(j = order; j>=1; --j){
-            tmp = vfdiv(s, vfbroadcast(j));
-            u = vfmacc(vfbroadcast(1.0f), tmp, u);
-        }
+        n_coef = 8;
+        float coef[8] = {0.000198527617612853646278381,
+                        0.00139304355252534151077271,
+                        0.00833336077630519866943359,
+                        0.0416664853692054748535156,
+                        0.166666671633720397949219, 
+                        0.5,
+                        1.0,
+                        1.0};
+        u = vfbroadcast(coef[0]);
+        for(j = 1; j < n_coef; ++j)
+            u = vfmacc(vfbroadcast(coef[j]), u, s);
 
         // Bit shift
         mask = vmsgt(vbroadcast(0), integers);                             // Create a 'smaller than zero' mask
