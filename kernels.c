@@ -447,104 +447,158 @@ void scalar_softmax(float * T, float * D, int * shape, int ndims, int axis, int 
 }
 */
 
-void softmax(float * T, float * D, int * shape, int ndims, int axis, int is_log){
+#define vsetvl(avl)                 __builtin_epi_vsetvl(avl, __epi_e32, __epi_m1)
+#define vload(ptr)                  __builtin_epi_vload_2xf32(ptr, gvl)
+#define vload_first(ptr)            __builtin_epi_vload_2xf32(ptr, 1)
+#define vstore(ptr, v)              __builtin_epi_vstore_2xf32(ptr, v, gvl)
+#define vstore_first(ptr, v)        __builtin_epi_vstore_2xf32(ptr, v, 1)
+#define vistore(ptr, v)             __builtin_epi_vstore_2xi32(ptr, v, gvl)
+#define vfadd(a, b)                 __builtin_epi_vfadd_2xf32(a, b, gvl)
+#define vadd(a, b)                  __builtin_epi_vadd_2xi32(a, b, gvl)
+#define vfsub(a, b)                 __builtin_epi_vfsub_2xf32(a, b, gvl)
+#define vsub(a, b)                  __builtin_epi_vsub_2xi32(a, b, gvl)
+#define vfmul(a, b)                 __builtin_epi_vfmul_2xf32(a, b, gvl)
+#define vmul_mask(a, b, c, mask)    __builtin_epi_vmul_2xi32_mask(a, b, c, mask, gvl)
+#define vfdiv(a, b)                 __builtin_epi_vfdiv_2xf32(a, b, gvl)
+#define vfdiv_mask(a, b, c, mask)   __builtin_epi_vfdiv_2xf32_mask(a, b, c, mask, gvl)
+#define vfbroadcast(a)              __builtin_epi_vbroadcast_2xf32(a, gvl)
+#define vbroadcast(a)               __builtin_epi_vbroadcast_2xi32(a, gvl)
+#define vf2i(a)                     __builtin_epi_vfcvt_x_f_2xi32_2xf32(a, gvl)
+#define vi2f(a)                     __builtin_epi_vfcvt_f_x_2xf32_2xi32(a, gvl)
+#define vfmacc(a, b, c)             __builtin_epi_vfmacc_2xf32(a, b, c, gvl)
+#define vmsgt(a, b)                 __builtin_epi_vmsgt_2xi32(a, b, gvl)
+#define vsll(a, b)                  __builtin_epi_vsll_2xi32(a, b, gvl)
+#define vsra(a, b)                  __builtin_epi_vsra_2xi32(a, b, gvl)
+#define vfredmax(a, b)              __builtin_epi_vfredmax_2xf32(a, b, gvl)
+#define vfredosum(a, b)             __builtin_epi_vfredosum_2xf32(a, b, gvl)
 
-    #define vsetvl(avl)                 __builtin_epi_vsetvl(avl, __epi_e32, __epi_m1)
-    #define vload(ptr)                  __builtin_epi_vload_2xf32(ptr, gvl)
-    #define vstore(ptr, v)              __builtin_epi_vstore_2xf32(ptr, v, gvl)
-    #define vfadd(a, b)                 __builtin_epi_vfadd_2xf32(a, b, gvl)
-    #define vfsub(a, b)                 __builtin_epi_vfsub_2xf32(a, b, gvl)
-    #define vfmul(a, b)                 __builtin_epi_vfmul_2xf32(a, b, gvl)
-    #define vmul_mask(a, b, c, mask)    __builtin_epi_vmul_2xi32_mask(a, b, c, mask, gvl)
-    #define vfdiv(a, b)                 __builtin_epi_vfdiv_2xf32(a, b, gvl)
-    #define vfdiv_mask(a, b, c, mask)   __builtin_epi_vfdiv_2xf32_mask(a, b, c, mask, gvl)
-    #define vfbroadcast(a)              __builtin_epi_vbroadcast_2xf32(a, gvl)
-    #define vbroadcast(a)               __builtin_epi_vbroadcast_2xi32(a, gvl)
-    #define vf2i(a)                     __builtin_epi_vfcvt_x_f_2xi32_2xf32(a, gvl)
-    #define vi2f(a)                     __builtin_epi_vfcvt_f_x_2xf32_2xi32(a, gvl)
-    #define vfmacc(a, b, c)             __builtin_epi_vfmacc_2xf32(a, b, c, gvl)
-    #define vmsgt(a, b)                 __builtin_epi_vmsgt_2xi32(a, b, gvl)
-    #define vsll(a, b)                  __builtin_epi_vsll_2xi32(a, b, gvl)
-    #define vfredmax(a, b)              __builtin_epi_vfredmax_2xf32(a, b, gvl)
-    
+__epi_2xf32 vfexp(__epi_2xf32 va, int gvl){
+
     #define R_LN2f 1.442695040888963407359924681001892137426645954152985934135449406931f
     #define L2Uf 0.693145751953125f
     #define L2Lf 1.428606765330187045e-06f
 
-    int i;
-    int j;
-    int stride;
-    int gvl;
-    int n_coef;
-    int l = 1;
-    for (i = 0; i < ndims; i++)
-        l *= shape[i];
-    float * aux = (float *)malloc(l * sizeof(float));
-
-    __epi_2xf32 d;
-    __epi_2xf32 vmax;
-    __epi_2xf32 d_R_LN2f;
     __epi_2xf32 q;
     __epi_2xi32 integers;
     __epi_2xf32 s;
     __epi_2xf32 u;
-    __epi_2xf32 powers;
-    __epi_2xi1 mask;
+
+    // Decompose e^d into 2^q * e^s
+    integers = vf2i(vfmul(va, vfbroadcast(R_LN2f)));
+    q = vi2f(integers);
+    s = vfmacc(va, q, vfbroadcast(-L2Uf));
+    s = vfmacc(s, q, vfbroadcast(-L2Lf));
+
+    // Apply Taylor's polynomial
+    u = vfbroadcast(0.000198527617612853646278381);
+    u = vfmacc(vfbroadcast(0.00139304355252534151077271), u, s);
+    u = vfmacc(vfbroadcast(0.00833336077630519866943359), u, s);
+    u = vfmacc(vfbroadcast(0.0416664853692054748535156), u, s);
+    u = vfmacc(vfbroadcast(0.166666671633720397949219), u, s);
+    u = vfmacc(vfbroadcast(0.5), u, s);
+    u = vfmacc(vfbroadcast(1), u, s);
+    u = vfmacc(vfbroadcast(1), u, s);
+
+    // Bit shift
+    u = (__epi_2xf32)(vadd(vsll(integers, vbroadcast(23)), (__epi_2xi32)u));
+
+    return u;
+}
+
+__epi_2xf32 vflog(__epi_2xf32 va, int gvl){
+
+    __epi_2xi32 rawIntBits;
+    __epi_2xi32 exponents;
+    __epi_2xf32 mantissas;
+    __epi_2xf32 x;
+    __epi_2xf32 x2;
+    __epi_2xf32 t;
+
+    rawIntBits = (__epi_2xi32)va;
+    exponents = vsub(vsra(rawIntBits, vbroadcast(23)), vbroadcast(0x7f));
+    mantissas = (__epi_2xf32)vsub(rawIntBits, vsll(exponents, vbroadcast(23)));
+
+    x = vfsub(mantissas, vfbroadcast(1));
+    x = vfdiv(x, vfadd(mantissas, vfbroadcast(1)));
+    x2 = vfmul(x, x);
+
+    t = vfbroadcast(0.2392828464508056640625f);
+    t = vfmacc(vfbroadcast(0.28518211841583251953125f), t, x2);
+    t = vfmacc(vfbroadcast(0.400005877017974853515625f), t, x2);
+    t = vfmacc(vfbroadcast(0.666666686534881591796875f), t, x2);
+    t = vfmacc(vfbroadcast(2.0f), t, x2);
+
+    x = vfadd(vfmul(x, t), vfmul(vfbroadcast(0.693147180559945286226764f), vi2f(exponents)));
+
+    return x;
+}
+
+#define vfexp(a) vfexp(a, gvl)
+#define vflog(a) vflog(a, gvl)
+
+void softmax(float * T, float * D, int * shape, int ndims, int axis, int is_log){
+    
+    int i, gvl;
+    int l = 1;
+    
+    for (i = 0; i < ndims; i++)
+        l *= shape[i];
+
+    __epi_2xf32 va;
+    __epi_2xf32 vmax;
+    __epi_2xf32 sum;
+
+    float max;
+    float * exponential = (float *)malloc(l * sizeof(float));
+    float norm;
 
     // Compute vmax
-    vmax = vfbroadcast(-1e8f);
+    vmax = vload_first(T);
     for (i = 0; i < l; i += gvl) {
         gvl = vsetvl(l - i);
-        d = vload(T + i);
-        vmax = vfredmax(d, vmax);
+        va = vload(T + i);
+        vmax = vfredmax(va, vmax);
     }
-    vstore(aux, vmax);
-    vmax = vfbroadcast(aux[0]);
+    vstore_first(&max, vmax);
 
-    // Apply the exponential function to every element
-    for (i = 0; i < l; i += gvl) {
+    // Compute exponential
+    for(i=0; i < l; i+=gvl){
         gvl = vsetvl(l - i);
-        d = vload(T + i);
-        d = vfsub(d, vmax); // Normalize
-
-        // Decompose e^x into 2^q * e^s
-        d_R_LN2f = vfmul(d, vfbroadcast(R_LN2f));   // Multiply d by 1/ln(2)
-        integers = vf2i(d_R_LN2f);                  // Get the closest integer for each element in d_R_LN2f
-        q = vi2f(integers);                         // Convert such integers to float again
-        s = vfmacc(d, q, vfbroadcast(-L2Uf));
-        s = vfmacc(s, q, vfbroadcast(-L2Lf));
-
-        // Apply Taylor polynomial
-        n_coef = 8;
-        float coef[8] = {0.000198527617612853646278381,
-                        0.00139304355252534151077271,
-                        0.00833336077630519866943359,
-                        0.0416664853692054748535156,
-                        0.166666671633720397949219, 
-                        0.5,
-                        1.0,
-                        1.0};
-
-        u = vfbroadcast(coef[0]);
-        for(j = 1; j < n_coef; ++j)
-            u = vfmacc(vfbroadcast(coef[j]), u, s);
-
-        // Bit shift
-        mask = vmsgt(vbroadcast(0), integers);                             // Create a 'smaller than zero' mask
-        integers = vmul_mask(integers, integers, vbroadcast(-1), mask);    // Absolute value
-        integers = vsll(vbroadcast(1), integers);                          // Powers of two        
-        powers = vi2f(integers);                                           // To float
-        powers = vfdiv_mask(powers, vfbroadcast(1.0f), powers, mask);      // Inverse of the negative values
-        u = vfmul(u, powers);
-
-        // Store
-        vstore(D + i, u);
+        va = vload(T + i);
+        va = vfsub(va, vfbroadcast(max));
+        va = vfexp(va);
+        vstore(exponential + i, va);
     }
 
-    // Compute the stride
-    stride = l;
-    for (i = 0; i < axis+1; i++)
-        stride /= shape[i];
+    // Normalize
+    gvl = vsetvl(l);
+    sum = vload(exponential);
+    for (i = 1; i < l / gvl; i++)
+        sum = vfadd(sum, vload(exponential + i*gvl));
+    sum = vfredosum(sum, vfbroadcast(0));
+
+    if (l % gvl > 0) {
+        gvl = l % gvl;
+        sum = vfredosum(vload(exponential + i*gvl), sum);
+    }
+    vstore_first(&norm, sum);
+
+    if(!is_log){
+        for(i=0; i < l; i+=gvl){
+            gvl = vsetvl(l - i);
+            va = vload(exponential + i);
+            va = vfdiv(va, vfbroadcast(norm));
+            vstore(D + i, va);
+        }
+    } else {
+        for(i=0; i < l; i+=gvl){
+            gvl = vsetvl(l - i);
+            va = vload(T + i);
+            va = vfsub(va, vfbroadcast(max));
+            va = vfsub(va, vflog(vfbroadcast(norm)));
+            vstore(D + i, va);
+        }
+    }
 
     return;
 }
